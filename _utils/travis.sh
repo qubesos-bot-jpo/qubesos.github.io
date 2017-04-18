@@ -17,9 +17,18 @@ cd "$(dirname "$0")/.."
 export NOKOGIRI_USE_SYSTEM_LIBRARIES=true
 gem install github-pages html-proofer
 
-echo ============ env vars =============
-env
-echo
+repo_owner=${TRAVIS_REPO_SLUG%%/*}
+repo_name=${TRAVIS_REPO_SLUG#*/}
+
+# Use modules of same owner so you can test whole site before proposing PR
+git config --file .gitmodules --get-regexp '.*\.url' \
+| while read repo url; do
+	owner_url="${url/github.com\/[^\/]*\//github.com\/${repo_owner}\/}"
+	: url=$url
+	: repo_owner=$repo_owner
+	: owner_url=$owner_url
+	git config --file .gitmodules "$repo" "$owner_url"
+done
 
 git submodule update --init --recursive
 
@@ -31,7 +40,7 @@ if is_pr; then
 	echo moving old site
 	mv _site ~/old_site
 
-	sub_name=$(git config --file .gitmodules --list | grep -m1 -F -- "${TRAVIS_REPO_SLUG#*/}" | cut -d. -f2)
+	sub_name=$(git config --file .gitmodules --list | grep -m1 -F -- "$repo_name" | cut -d. -f2)
 	sub_path=$(git config --file .gitmodules --get -- "submodule.${sub_name}.path")
 	git -C "$sub_path" remote add base "https://github.com/${TRAVIS_REPO_SLUG}"
 	git -C "$sub_path" fetch base "pull/${TRAVIS_PULL_REQUEST}/head"
