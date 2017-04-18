@@ -23,7 +23,7 @@ repo_name=${TRAVIS_REPO_SLUG#*/}
 # Use modules of same owner so you can test whole site before proposing PR
 git config --file .gitmodules --get-regexp '.*\.url' \
 | while read repo url; do
-	owner_url="${url/github.com\/[^\/]*\//github.com\/${repo_owner}\/}"
+	owner_url="${url/github.com\/[^\/]*\//github.com/${repo_owner}/}"
 	: url=$url
 	: repo_owner=$repo_owner
 	: owner_url=$owner_url
