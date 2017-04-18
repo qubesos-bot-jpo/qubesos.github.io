@@ -4,8 +4,9 @@ set -x
 set -e
 set -o pipefail
 
-is_pr=false
-[ -z "$TRAVIS_PULL_REQUEST" -o false = "$TRAVIS_PULL_REQUEST" ] && is_pr=true
+is_pr() {
+	test -n "$TRAVIS_PULL_REQUEST" -a false != "$TRAVIS_PULL_REQUEST"
+}
 
 cd "$(dirname "$0")/.."
 
@@ -23,21 +24,19 @@ echo
 git submodule update --init --recursive
 
 bundle exec jekyll build
-mv _site ~/old_site
-
-if $is_pr; then
-	sub_name=$(git config --file .gitmodules --list | grep -m1 -F -- "${TRAVIS_REPO_SLUG#*/}" | cut -d. -f2)
-	sub_path=$(git config --file .gitmodules --get -- "submodule.${sub_name}.path")
-	git -C "$sub_path" remote add base "https://github.com/${TRAVIS_REPO_SLUG}"
-	git -C "$sub_path" fetch base "pull/${TRAVIS_REPO_PR}/head"
-	git -C "$sub_path" checkout FETCH_HEAD
-	pull --commit -- "$TRAVIS_BUILD_DIR"
-	bundle exec jekyll build
-fi
 
 htmlproofer ./_site --disable-external --checks-to-ignore ImageCheck --file-ignore ./_site/video-tours/index.html --url-ignore "/qubes-issues/,https://ftp.qubes-os.org /,https://mirrors.kernel.org /"
 
-if $is_pr; then
+if is_pr; then
 	mv _site ~/old_site
+
+	sub_name=$(git config --file .gitmodules --list | grep -m1 -F -- "${TRAVIS_REPO_SLUG#*/}" | cut -d. -f2)
+	sub_path=$(git config --file .gitmodules --get -- "submodule.${sub_name}.path")
+	git -C "$sub_path" remote add base "https://github.com/${TRAVIS_REPO_SLUG}"
+	git -C "$sub_path" fetch base "pull/${TRAVIS_PULL_REQUEST}/head"
+	git -C "$sub_path" checkout FETCH_HEAD
+	bundle exec jekyll build
+	mv _site ~/new_site
+
 	diff -ur ~/old_site ~/new_site || true
 fi
