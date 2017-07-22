@@ -4,6 +4,13 @@ rvm:
  - 2.1
 install: true
 script: ./_utils/travis.sh
+addons:
+  apt:
+    # These must be kept in sync with the .travis.yml in submodules
+    packages:
+    - hunspell
+    - pandoc
+    - jq
 notifications:
   email:
     recipients:
