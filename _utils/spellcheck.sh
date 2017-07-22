@@ -8,6 +8,13 @@ v() {
         echo "$@"
     fi
 }
+vtime() {
+    if [ -n "$VERBOSE" ]; then
+        time "$@"
+    else
+        "$@"
+    fi
+}
 
 if command -v hunspell > /dev/null; then
     check_words() { hunspell -l; }
@@ -49,66 +56,36 @@ extract_words() {
     '
 }
 
-find_suspects() {
-    local workdir=$1
-    local outdir=$2
-    mkdir -p "$outdir"
-    v "Parsing $outdir..."
-    find "$workdir" -mindepth 1 -type d -printf '%P\0' \
-      | ( cd "$outdir" && xargs -0 mkdir -p ) >&2
-    find "$workdir" -type f -name '*.html' -printf '%P\0' \
+check_site() {
+    local site_in=$1
+    local words_out=$2
+
+    rm -rf "$words_out"
+    mkdir -p "$words_out/suspects.tree"
+    v "Checking $site_in, storing results in $words_out"
+    find "$site_in" -mindepth 1 -type d -printf '%P\0' \
+      | ( cd "$words_out/suspects.tree" && xargs -0 mkdir -p ) >&2
+    find "$site_in" -type f -name '*.html' -printf '%P\0' \
       | while read -d '' f; do
-        extract_words "${workdir}/${f}" | check_words | sort -u \
-          > "${outdir}/${f}.wrong"
+        extract_words "$site_in/$f" | check_words | sort -u \
+          > "$words_out/suspects.tree/${f}.wrong"
     done
+    find "$words_out/suspects.tree" -type f -exec cat {} + | sort -u \
+      > "$words_out/suspects.flat"
 }
 
-check_one() {
-    local ref=$1
-    local checkout="${d}/${ref}.checkout"
-    [ -d "$checkout" ] && { v "Using cached $ref"; return; }
-    local tree="${d}/${ref}.suspects.tree"
-    local flat="${d}/${ref}.suspects.flat"
-
-    # We want to make a duplicate of the repo without requiring re-cloning it
-    # over the network. Perhaps the commits we want to test are not pushed to
-    # the remote. This is particularly a problem with submodules, which (when
-    # cloned) reset their url to the upstream remote rather than the
-    # superproject origin. There are several options:
-    # - hackily fix up the submodule urls post-clone
-    # - potentially use git-worktree(1), but the BUGS section of the man page
-    #   (at least in 2.7.4) says:
-    #      Multiple checkout in general is still experimental, and the support
-    #      for submodules is incomplete. It is NOT recommended to make multiple
-    #      checkouts of a superproject.
-    # - copy the whole .git dir, which is very much overkill especially when
-    #   used on a local repo (as opposed to CI) which may carry more objects,
-    #   but seems to be the least fragile way I've found so far.
-
-    v "Checking out $ref..."
-    mkdir -p "$checkout"
-    cp -pr .git "$checkout"
-    git -q -C "$checkout" checkout --force "$ref"
-    git -q -C "$checkout" submodule update --checkout --recursive --force
-
-    v "Building $ref..."
-    ( cd "$checkout" && make >/dev/null 2>&1 )
-    find_suspects "$checkout/_site" "$tree"
-    find "$tree" -type f -exec cat {} + | sort -u > "$flat"
-}
-
-diff_two() {
+diff_checked() {
     local old=$1
     local new=$2
-    local cmp="${d}/${old}..${new}"
-    check_one "$old"
-    check_one "$new"
-    [ -e "${cmp}.plusminus" ] && { v "Using cached diff"; return; }
-    diff -u "$d"/{"${old}","${new}"}.suspects.flat > "${cmp}.diff.flat" || :
-    grep -v '^\( \|@\|+++\|---\)' < "${cmp}.diff.flat" | LC_ALL=C sort \
-      > "${cmp}.plusminus" || :
-    grep '^+' < "${cmp}.plusminus" > "${cmp}.plus" || :
-    grep '^-' < "${cmp}.plusminus" > "${cmp}.minus" || :
+    local diff_dir=$3
+
+    rm -rf "$diff_dir"
+    mkdir -p "$diff_dir"
+    diff -u {"$old","$new"}/suspects.flat > "$diff_dir/diff" || :
+    grep -v '^\( \|@\|+++\|---\)' < "$diff_dir/diff" | LC_ALL=C sort \
+      > "$diff_dir/plusminus" || :
+    grep '^+' < "$diff_dir/plusminus" > "$diff_dir/plus" || :
+    grep '^-' < "$diff_dir/plusminus" > "$diff_dir/minus" || :
 }
 
 
@@ -116,77 +93,79 @@ ansi() { cc=$1; shift; printf "\x1b[${cc}m%s\x1b[0m\n" "$*" ; }
 red() { ansi 31 "$@" ; }
 green() { ansi 32 "$@" ; }
 
-show() {
-    local ref=$1
+show_in_src() {
+    local src_dir=$1
+
     while read -d $'\n' suspect; do
-        ( cd "$d/${ref}.checkout" && \
-          find -type f -exec grep --color=always -rHnwF "$suspect" {} + )
+        ( cd "$src_dir" && \
+          find -type f -not -path './_site/*' -not -path './.git/*' \
+            -exec grep --color=always -rHnwF "$suspect" {} + )
     done
 }
 
-diff_report() {
-    local old=$1
-    local new=$2
-    local plus=${d}/${old}..${new}.plus
-    local minus=${d}/${old}..${new}.minus
+report_diff() {
+    local diff_dir=$1
+    local src_dir=$2
 
-    diff_two "$old" "$new"
-
-    echo "Spelling report for ${old:0:8}..${new:0:8}:"
-    echo
-    if [ -s "$plus" ]; then
+    if [ -s "$diff_dir/plus" ]; then
         red 'The following new unknown spellings were introduced:'
-        sed 's/^/    /' < "$plus"
+        sed 's/^/    /' < "$diff_dir/plus"
     else
         green 'No new unique misspellings were introduced.'
     fi
 
-    if [ -s "$minus" ]; then
+    if [ -s "$diff_dir/minus" ]; then
         echo
         echo 'In addition, the following suspicious spellings were eliminated:'
-        sed 's/^/    /' < "$minus"
+        sed 's/^/    /' < "$diff_dir/minus"
     fi
 
-    if [ -s "$plus" ]; then
+    if [ -s "$diff_dir/plus" ]; then
         echo
         echo 'The introduced suspects in context are:'
         echo
-        sed 's/^+//' < "$plus" | show "$new"
+        sed 's/^+//' < "$diff_dir/plus" | show_in_src "$src_dir"
         echo
         echo 'If these are false-positives, simply commit as is and they will'
         echo 'be ignored in the future.'
     fi
 }
 
+usage() {
+    echo "Usage: ${0##*/} [[old-built-site] HEAD-built-site]" >&2
+    exit 2
+}
 
-if [ -n "$SPELL_CHECK_CACHE" ]; then
-    d=$SPELL_CHECK_CACHE
-    mkdir -p "$d"
-    echo "Using spell check cache dir: $d"
-else
-    d=$(mktemp -d)
-    trap 'rm -rf "$d"' EXIT
-fi
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+
+repo="$(dirname "$(dirname "$(readlink -f "$0")")")"
 
 case $# in
 0)
-    old=$(git rev-parse HEAD)
-    new=$(git rev-parse refs/remotes/origin/master)
+    if ! [ -d "$repo/_site" ]; then
+        echo "${0##*/}: zero-argument form requires a built site in _site" >&2
+        usage
+    fi
+    vtime check_site "$repo/_site" "$d"
+    v
+    show_in_src "$repo" < "$d/suspects.flat"
     ;;
 1)
-    old=$(git rev-parse "$1"^)
-    new=$(git rev-parse "$1")
+    vtime check_site "$1" "$d"
+    v
+    show_in_src "$repo" < "$d/suspects.flat"
     ;;
 2)
-    old=$(git rev-parse "$1")
-    new=$(git rev-parse "$2")
+    vtime check_site "$1" "$d/old"
+    vtime check_site "$2" "$d/new"
+    v
+    diff_checked "$d/old" "$d/new" "$d/diff"
+    report_diff "$d/diff"
+    # exit 0 if no new unknown unique spellings were introduced, 1 otherwise
+    ! test -s "$d/diff/plus"
     ;;
 *)
-    echo "Usage: ${0##*/} [[old-ref] new-ref]" >&2
-    exit 2
+    usage
+    ;;
 esac
-
-diff_report "$old" "$new"
-
-# exit 0 if no new unknown unique spellings were introduced, 1 otherwise
-! test -s "$plus"
