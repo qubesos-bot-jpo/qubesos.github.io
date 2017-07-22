@@ -8,6 +8,8 @@ addons:
   apt:
     packages:
     - hunspell
+    - pandoc
+    - jq
 notifications:
   email:
     recipients:
