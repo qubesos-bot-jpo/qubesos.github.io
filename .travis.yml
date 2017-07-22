@@ -4,6 +4,10 @@ rvm:
  - 2.1
 install: true
 script: ./_utils/travis.sh
+addons:
+  apt:
+    packages:
+    - hunspell
 notifications:
   email:
     recipients:
