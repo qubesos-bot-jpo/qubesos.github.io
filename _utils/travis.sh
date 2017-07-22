@@ -51,6 +51,11 @@ git -C "$sub_path" checkout FETCH_HEAD
 bundle exec jekyll build
 
 if [ -d ~/old_site ]; then
+    echo "Spelling report for $TRAVIS_COMMIT_RANGE:"
+    echo
+    _utils/spellcheck.sh ~/old_site _site
+
+    echo
     echo diffing
     diff -ur ~/old_site ./_site || true
 fi
