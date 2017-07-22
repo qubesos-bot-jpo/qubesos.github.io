@@ -17,6 +17,11 @@ cd "$(dirname "$0")/.."
 export NOKOGIRI_USE_SYSTEM_LIBRARIES=true
 gem install github-pages html-proofer
 
+# Dependency needed for spell checking, which we only do on PRs
+if is_pr; then
+	sudo apt-get install hunspell
+fi
+
 repo_owner=${TRAVIS_REPO_SLUG%%/*}
 repo_name=${TRAVIS_REPO_SLUG#*/}
 
